@@ -1,0 +1,13 @@
+numpy
+pandas
+torch
+transformers
+sentence-transformers
+faiss-cpu
+langchain
+llama-index
+streamlit
+fastapi
+uvicorn
+pydantic
+PyPDF2
