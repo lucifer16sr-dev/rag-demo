@@ -215,24 +215,59 @@ Answer:"""
         if not retrieved_docs:
             return "I couldn't find any relevant documents to answer your question."
         
-        # Extract first sentences from each document snippet
-        sentences = []
-        for doc in retrieved_docs:
+        # Extract relevant content from each document snippet
+        # Format it in a more readable way with better structure
+        answer_parts = []
+        for i, doc in enumerate(retrieved_docs, 1):
             snippet = doc.get('snippet', '')
             if snippet:
-                first_sent = self._extract_first_sentence(snippet)
-                if first_sent:
-                    sentences.append(first_sent)
+                # Clean up the snippet - remove excessive whitespace
+                snippet = ' '.join(snippet.split())
+                
+                # Use a larger portion of the snippet (up to 250 chars per snippet)
+                # Try to break at sentence boundary for cleaner cuts
+                if len(snippet) > 250:
+                    truncated = snippet[:250]
+                    last_period = truncated.rfind('.')
+                    last_question = truncated.rfind('?')
+                    last_exclamation = truncated.rfind('!')
+                    last_sentence = max(last_period, last_question, last_exclamation)
+                    if last_sentence > 100:  # Only use if we have enough content
+                        snippet_text = snippet[:last_sentence + 1]
+                    else:
+                        # If no good sentence break, cut at word boundary
+                        last_space = truncated.rfind(' ')
+                        if last_space > 100:
+                            snippet_text = snippet[:last_space] + "..."
+                        else:
+                            snippet_text = snippet[:250] + "..."
+                else:
+                    snippet_text = snippet
+                
+                snippet_text = snippet_text.strip()
+                if snippet_text:
+                    answer_parts.append(snippet_text)
         
-        if not sentences:
+        if not answer_parts:
             return "I found relevant documents but couldn't extract meaningful information."
         
-        # Combine sentences into an answer
-        answer = " ".join(sentences)
+        # Combine snippets into an answer with better formatting
+        # Use double newlines to create clear paragraph breaks
+        if len(answer_parts) == 1:
+            answer = answer_parts[0]
+        else:
+            # Format multiple snippets as separate paragraphs
+            answer = "\n\n".join(f"• {part}" for part in answer_parts)
         
-        # Limit length
-        if len(answer) > 500:
-            answer = answer[:500] + "..."
+        # Limit total length
+        if len(answer) > 1000:
+            # Try to cut at a paragraph boundary
+            truncated = answer[:1000]
+            last_break = truncated.rfind('\n\n')
+            if last_break > 500:
+                answer = answer[:last_break]
+            else:
+                answer = truncated + "..."
         
         return answer
     
