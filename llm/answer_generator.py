@@ -16,7 +16,7 @@ try:
 except ImportError:
     OPENAI_AVAILABLE = False
 
-from retrieval.query_system import query_documents
+from retrieval.query_system import query_documents, QuerySystem
 
 # Configure logging
 logging.basicConfig(
@@ -33,12 +33,20 @@ class AnswerGenerator:
         model_type: str = "auto",
         openai_model: str = "gpt-3.5-turbo",
         hf_model: str = "microsoft/DialoGPT-medium",
-        use_local: bool = False
+        use_local: bool = False,
+        query_system: Optional[QuerySystem] = None,
+        cache_size: int = 100
     ):
         self.model_type = model_type
         self.openai_model = openai_model
         self.hf_model = hf_model
         self.use_local = use_local
+        
+        # Initialize or reuse QuerySystem for caching
+        if query_system is None:
+            self.query_system = QuerySystem(cache_size=cache_size, enable_cache=True)
+        else:
+            self.query_system = query_system
         
         # Initialize model based on availability and preferences
         self._initialize_model()
@@ -285,9 +293,9 @@ Answer:"""
             }
         
         try:
-            # Retrieve relevant documents
+            # Retrieve relevant documents using cached QuerySystem
             logger.info(f"Retrieving top-{top_k} documents for query: '{query}'")
-            retrieved_docs = query_documents(query, top_k=top_k)
+            retrieved_docs = self.query_system.query_documents(query, top_k=top_k)
             
             if not retrieved_docs:
                 logger.warning(f"No documents retrieved for query: '{query}'")

@@ -3,6 +3,8 @@ import logging
 from pathlib import Path
 from typing import List, Dict, Optional, Any
 import numpy as np
+import hashlib
+from collections import OrderedDict
 
 try:
     import faiss
@@ -32,7 +34,9 @@ class QuerySystem:
         model_name: str = "all-mpnet-base-v2",
         index_path: Optional[str] = None,
         metadata_path: Optional[str] = None,
-        snippet_length: int = 500
+        snippet_length: int = 500,
+        cache_size: int = 100,
+        enable_cache: bool = True
     ):
         if embedding_store is None:
             logger.info("Loading embedding store from disk...")
@@ -46,7 +50,17 @@ class QuerySystem:
         
         self.model = self.embedding_store.model
         self.snippet_length = snippet_length
+        
+        # Initialize query cache (LRU-style using OrderedDict)
+        self.enable_cache = enable_cache
+        self.cache_size = cache_size
+        self._cache: OrderedDict[str, List[Dict[str, Any]]] = OrderedDict()
+        self._cache_hits = 0
+        self._cache_misses = 0
+        
         logger.info(f"Query system initialized. Vector database contains {self.embedding_store.get_index_size()} documents.")
+        if enable_cache:
+            logger.info(f"Query caching enabled (max size: {cache_size})")
     
     def _read_document_content(self, filepath: str, file_type: str):
         try:
@@ -77,6 +91,68 @@ class QuerySystem:
         
         return snippet + "..."
     
+    def _get_cache_key(self, query: str, top_k: int):
+        # Normalize query (lowercase, strip whitespace) for consistent caching
+        normalized_query = query.lower().strip()
+        # Use hash to keep key size manageable
+        query_hash = hashlib.md5(normalized_query.encode('utf-8')).hexdigest()[:16]
+        return f"{query_hash}:{top_k}"
+    
+    def _get_from_cache(self, query: str, top_k: int):
+        if not self.enable_cache:
+            return None
+        
+        cache_key = self._get_cache_key(query, top_k)
+        
+        if cache_key in self._cache:
+            # Move to end (most recently used)
+            self._cache.move_to_end(cache_key)
+            self._cache_hits += 1
+            logger.debug(f"Cache HIT for query: '{query[:50]}...' (top_k={top_k})")
+            return self._cache[cache_key]
+        
+        self._cache_misses += 1
+        logger.debug(f"Cache MISS for query: '{query[:50]}...' (top_k={top_k})")
+        return None
+    
+    def _add_to_cache(self, query: str, top_k: int, results: List[Dict[str, Any]]):
+        if not self.enable_cache:
+            return
+        
+        cache_key = self._get_cache_key(query, top_k)
+        
+        # If cache is full, remove least recently used item
+        if len(self._cache) >= self.cache_size and cache_key not in self._cache:
+            oldest_key = next(iter(self._cache))
+            del self._cache[oldest_key]
+            logger.debug(f"Cache evicted entry for key: {oldest_key}")
+        
+        # Add new entry (or update existing)
+        self._cache[cache_key] = results
+        self._cache.move_to_end(cache_key)
+        logger.debug(f"Cached results for query: '{query[:50]}...' (top_k={top_k})")
+    
+    def clear_cache(self):
+        cache_size = len(self._cache)
+        self._cache.clear()
+        self._cache_hits = 0
+        self._cache_misses = 0
+        logger.info(f"Cache cleared ({cache_size} entries removed)")
+    
+    def get_cache_stats(self):
+        total_queries = self._cache_hits + self._cache_misses
+        hit_rate = (self._cache_hits / total_queries * 100) if total_queries > 0 else 0.0
+        
+        return {
+            'cache_enabled': self.enable_cache,
+            'cache_size': len(self._cache),
+            'max_cache_size': self.cache_size,
+            'cache_hits': self._cache_hits,
+            'cache_misses': self._cache_misses,
+            'total_queries': total_queries,
+            'hit_rate_percent': round(hit_rate, 2)
+        }
+    
     def query_documents(
         self,
         query: str,
@@ -99,6 +175,14 @@ class QuerySystem:
             logger.warning(f"Requested top_k={top_k} but only {max_docs} documents available. Using {max_docs}.")
             top_k = max_docs
         
+        # Check cache first
+        cached_results = self._get_from_cache(query, top_k)
+        if cached_results is not None:
+            logger.info(f"Cache HIT - Returning cached results for query: '{query[:50]}...' (top_k={top_k})")
+            logger.info(f"Retrieved {len(cached_results)} documents from cache")
+            return cached_results
+        
+        # Cache miss - perform query
         logger.info(f"Querying for: '{query}' (top_k={top_k})")
         
         # Encode the query
@@ -145,6 +229,19 @@ class QuerySystem:
             results.append(result)
         
         logger.info(f"Retrieved {len(results)} documents for query: '{query}'")
+        
+        # Cache the results
+        self._add_to_cache(query, top_k, results)
+        
+        # Log cache statistics periodically (every 10 queries)
+        total_queries = self._cache_hits + self._cache_misses
+        if total_queries % 10 == 0 and total_queries > 0:
+            stats = self.get_cache_stats()
+            logger.info(
+                f"Cache stats - Hits: {stats['cache_hits']}, Misses: {stats['cache_misses']}, "
+                f"Hit Rate: {stats['hit_rate_percent']}%, Size: {stats['cache_size']}/{stats['max_cache_size']}"
+            )
+        
         return results
 
 
