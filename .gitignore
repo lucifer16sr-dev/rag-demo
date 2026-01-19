@@ -53,6 +53,10 @@ embeddings/
 *.faiss
 *.pkl
 
+# Data
+data/
+*.pdf
+
 # Logs
 *.log
 logs/

@@ -88,7 +88,7 @@ def main():
             
             try:
                 # Generate answer
-                result = generate_answer(query, top_k=3)
+                result = generate_answer(query, top_k=5)
             except KeyboardInterrupt:
                 indicator.stop()
                 print("\n\nOperation cancelled by user.")

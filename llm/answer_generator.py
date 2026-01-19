@@ -274,7 +274,7 @@ Answer:"""
     def generate_answer(
         self,
         query: str,
-        top_k: int = 3
+        top_k: int = 5
     ): # noqa: F821
         if not query or not query.strip():
             logger.warning("Empty query received.")
@@ -347,7 +347,7 @@ Answer:"""
 
 def generate_answer(
     query: str,
-    top_k: int = 3,
+    top_k: int = 5,
     answer_generator: Optional[AnswerGenerator] = None,
     **kwargs
 ): # noqa: F821
@@ -392,7 +392,7 @@ if __name__ == "__main__":
                 break
             
             # Generate answer
-            result = ag.generate_answer(query, top_k=3)
+            result = ag.generate_answer(query, top_k=5)
             
             # Display results
             print("\n" + "=" * 60)

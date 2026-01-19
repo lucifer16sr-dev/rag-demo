@@ -29,7 +29,7 @@ class QuerySystem:
     def __init__(
         self,
         embedding_store: Optional[EmbeddingStore] = None,
-        model_name: str = "all-MiniLM-L6-v2",
+        model_name: str = "all-mpnet-base-v2",
         index_path: Optional[str] = None,
         metadata_path: Optional[str] = None,
         snippet_length: int = 500
@@ -80,7 +80,7 @@ class QuerySystem:
     def query_documents(
         self,
         query: str,
-        top_k: int = 3
+        top_k: int = 5
     ):
         if not query or not query.strip():
             logger.warning("Empty query received.")
@@ -90,8 +90,8 @@ class QuerySystem:
             raise ValueError("Vector index is not loaded. Please ensure embeddings are created.")
         
         if top_k <= 0:
-            logger.warning(f"Invalid top_k value: {top_k}. Using default value of 3.")
-            top_k = 3
+            logger.warning(f"Invalid top_k value: {top_k}. Using default value of 5.")
+            top_k = 5
         
         # Limit top_k to the number of documents in the index
         max_docs = self.embedding_store.get_index_size()
@@ -150,7 +150,7 @@ class QuerySystem:
 
 def query_documents(
     query: str,
-    top_k: int = 3,
+    top_k: int = 5,
     query_system: Optional[QuerySystem] = None,
     **kwargs
 ):
@@ -193,7 +193,7 @@ if __name__ == "__main__":
                 break
             
             # Query the system
-            results = qs.query_documents(query, top_k=3)
+            results = qs.query_documents(query, top_k=5)
             
             if not results:
                 print("No results found.")

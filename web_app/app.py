@@ -109,7 +109,7 @@ if submit_button:
             with st.spinner("Generating answer... This may take a moment."):
                 try:
                     # Generate answer using cached generator
-                    result = st.session_state.answer_generator.generate_answer(query, top_k=3)
+                    result = st.session_state.answer_generator.generate_answer(query, top_k=5)
                     
                     # Display answer
                     st.markdown("### Answer:")

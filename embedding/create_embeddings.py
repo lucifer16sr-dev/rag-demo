@@ -19,7 +19,7 @@ from ingestion.ingest_documents import ingest_all_documents
 class EmbeddingStore:
     def __init__(
         self,
-        model_name: str = "all-MiniLM-L6-v2",
+        model_name: str = "all-mpnet-base-v2",
         embedding_dim: Optional[int] = None,
         index_path: Optional[str] = None,
         metadata_path: Optional[str] = None
@@ -101,17 +101,41 @@ class EmbeddingStore:
         print(f"Total documents in database: {self.index.ntotal}")
     
     def save(self):
+        """
+        Persistently save the FAISS index and metadata to disk.
+        
+        Raises:
+            ValueError: If no index exists to save.
+            IOError: If file operations fail.
+        """
         if self.index is None:
             raise ValueError("No index to save. Add documents first.")
         
-        # Save FAISS index
-        faiss.write_index(self.index, str(self.index_path))
-        print(f"Saved FAISS index to {self.index_path}")
+        if len(self.metadata) != self.index.ntotal:
+            raise ValueError(f"Metadata count ({len(self.metadata)}) doesn't match index size ({self.index.ntotal})")
         
-        # Save metadata
-        with open(self.metadata_path, 'wb') as f:
-            pickle.dump(self.metadata, f)
-        print(f"Saved metadata to {self.metadata_path}")
+        try:
+            # Ensure directory exists
+            self.index_path.parent.mkdir(parents=True, exist_ok=True)
+            self.metadata_path.parent.mkdir(parents=True, exist_ok=True)
+            
+            # Save FAISS index
+            faiss.write_index(self.index, str(self.index_path))
+            print(f"Saved FAISS index to {self.index_path}")
+            
+            # Save metadata with error handling
+            with open(self.metadata_path, 'wb') as f:
+                pickle.dump(self.metadata, f)
+            print(f"Saved metadata for {len(self.metadata)} documents to {self.metadata_path}")
+            
+            # Verify save was successful
+            if not self.index_path.exists():
+                raise IOError(f"Index file was not created at {self.index_path}")
+            if not self.metadata_path.exists():
+                raise IOError(f"Metadata file was not created at {self.metadata_path}")
+                
+        except Exception as e:
+            raise IOError(f"Failed to save vector store: {e}") from e
     
     def load(self):
         if not self.index_path.exists():
@@ -119,15 +143,38 @@ class EmbeddingStore:
         if not self.metadata_path.exists():
             raise FileNotFoundError(f"Metadata file not found: {self.metadata_path}")
         
-        # Load FAISS index
-        self.index = faiss.read_index(str(self.index_path))
-        print(f"Loaded FAISS index from {self.index_path}")
-        print(f"Index contains {self.index.ntotal} vectors")
-        
-        # Load metadata
-        with open(self.metadata_path, 'rb') as f:
-            self.metadata = pickle.load(f)
-        print(f"Loaded metadata for {len(self.metadata)} documents")
+        try:
+            # Load FAISS index
+            self.index = faiss.read_index(str(self.index_path))
+            index_size = self.index.ntotal
+            print(f"Loaded FAISS index from {self.index_path}")
+            print(f"Index contains {index_size} vectors")
+            
+            # Verify index dimension matches model
+            if self.index.d != self.embedding_dim:
+                raise ValueError(
+                    f"Index dimension ({self.index.d}) doesn't match model dimension ({self.embedding_dim}). "
+                    f"Please recreate embeddings with model: {self.model_name}"
+                )
+            
+            # Load metadata
+            with open(self.metadata_path, 'rb') as f:
+                self.metadata = pickle.load(f)
+            metadata_count = len(self.metadata)
+            print(f"Loaded metadata for {metadata_count} documents")
+            
+            # Verify consistency
+            if metadata_count != index_size:
+                raise ValueError(
+                    f"Metadata count ({metadata_count}) doesn't match index size ({index_size}). "
+                    "The vector store may be corrupted. Please recreate embeddings."
+                )
+                
+        except Exception as e:
+            # Reset state on failure
+            self.index = None
+            self.metadata = []
+            raise IOError(f"Failed to load vector store: {e}") from e
     
     def get_index_size(self):
         if self.index is None:
@@ -142,7 +189,7 @@ class EmbeddingStore:
 
 def create_embeddings_from_documents(
     data_dir: str = "data",
-    model_name: str = "all-MiniLM-L6-v2",
+    model_name: str = "all-mpnet-base-v2",
     index_path: Optional[str] = None,
     metadata_path: Optional[str] = None,
     save: bool = True
@@ -184,7 +231,7 @@ def create_embeddings_from_documents(
 
 
 def load_embedding_store(
-    model_name: str = "all-MiniLM-L6-v2",
+    model_name: str = "all-mpnet-base-v2",
     index_path: Optional[str] = None,
     metadata_path: Optional[str] = None
 ):
