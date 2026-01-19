@@ -14,6 +14,14 @@ except ImportError as e:
     )
 
 from ingestion.ingest_documents import ingest_all_documents
+import logging
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 
 class EmbeddingStore:
@@ -198,12 +206,15 @@ def create_embeddings_from_documents(
     print("Creating Embeddings for Documents")
     print("=" * 60)
     
-    # Ingest documents
-    print(f"\nStep 1: Ingesting documents from '{data_dir}'...")
-    documents = ingest_all_documents(data_dir)
+    # Load and clean documents using load_documents function
+    print(f"\nStep 1: Loading and cleaning documents from '{data_dir}'...")
+    documents = load_documents(data_dir)
     
     if not documents:
-        raise ValueError(f"No documents found in {data_dir}. Please add documents first.")
+        raise ValueError(
+            f"No documents found or successfully processed in {data_dir}. "
+            "Please add PDF or Markdown files and try again."
+        )
     
     # Create embedding store
     print(f"\nStep 2: Initializing embedding model '{model_name}'...")
@@ -242,6 +253,40 @@ def load_embedding_store(
     )
     store.load()
     return store
+
+
+def load_documents(folder_path: str = "data"):
+    logger.info(f"Loading documents from folder: {folder_path}")
+    
+    try:
+        # Use the existing ingestion function which handles errors gracefully
+        documents = ingest_all_documents(folder_path)
+        
+        if not documents:
+            logger.warning(f"No documents found or successfully processed in {folder_path}")
+            return []
+        
+        logger.info(f"Successfully loaded {len(documents)} clean document(s)")
+        
+        # Log summary by language
+        language_counts = {}
+        for doc in documents:
+            lang = doc.get('language', 'unknown')
+            language_counts[lang] = language_counts.get(lang, 0) + 1
+        
+        if language_counts:
+            logger.info("Language distribution:")
+            for lang, count in language_counts.items():
+                logger.info(f"  - {lang}: {count} document(s)")
+        
+        return documents
+    
+    except FileNotFoundError as e:
+        logger.error(f"Folder not found: {e}")
+        return []
+    except Exception as e:
+        logger.error(f"Error loading documents from {folder_path}: {e}")
+        return []
 
 
 if __name__ == "__main__":

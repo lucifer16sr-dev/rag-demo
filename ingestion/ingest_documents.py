@@ -1,5 +1,6 @@
 
 import os
+import logging
 from pathlib import Path
 from typing import List, Dict, Optional
 import re
@@ -8,6 +9,20 @@ try:
     import PyPDF2
 except ImportError:
     raise ImportError("PyPDF2 is required. Install with: pip install PyPDF2")
+
+try:
+    from langdetect import detect, LangDetectException
+    LANGDETECT_AVAILABLE = True
+except ImportError:
+    LANGDETECT_AVAILABLE = False
+    logging.warning("langdetect not available. Language detection disabled. Install with: pip install langdetect")
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 
 def read_pdf(file_path: str):
@@ -63,12 +78,36 @@ def read_markdown(file_path: str):
         raise ValueError(f"Error reading Markdown file {file_path}: {e}")
 
 
-def clean_text(text: str):
+def detect_language(text: str):
+    if not LANGDETECT_AVAILABLE or not text or len(text.strip()) < 50:
+        return None
+    
+    try:
+        # Use first 1000 characters for faster detection
+        sample_text = text[:1000] if len(text) > 1000 else text
+        language = detect(sample_text)
+        return language
+    except LangDetectException as e:
+        logger.debug(f"Language detection failed: {e}")
+        return None
+    except Exception as e:
+        logger.debug(f"Unexpected error in language detection: {e}")
+        return None
+
+
+def clean_text(text: str, remove_extra_spaces: bool = True):
     if not text:
         return ""
     
+    # Remove control characters except newlines and tabs
+    text = re.sub(r'[\x00-\x08\x0b-\x0c\x0e-\x1f\x7f-\x9f]', '', text)
+    
+    # Normalize unicode characters (optional - can be enabled if needed)
+    # text = unicodedata.normalize('NFKD', text)
+    
     # Remove extra whitespace between words (but keep single spaces)
-    text = re.sub(r'[ \t]+', ' ', text)
+    if remove_extra_spaces:
+        text = re.sub(r'[ \t]+', ' ', text)
     
     # Normalize line breaks (convert all to \n)
     text = re.sub(r'\r\n', '\n', text)
@@ -90,7 +129,8 @@ def clean_text(text: str):
     cleaned_text = '\n'.join(lines)
     
     # Final cleanup: remove any remaining excessive whitespace
-    cleaned_text = re.sub(r'[ \t]+', ' ', cleaned_text)
+    if remove_extra_spaces:
+        cleaned_text = re.sub(r'[ \t]+', ' ', cleaned_text)
     
     return cleaned_text.strip()
 
@@ -108,29 +148,55 @@ def ingest_pdf_files(data_dir: str = "data"):
     pdf_files = list(data_path.glob("*.pdf"))
     
     if not pdf_files:
-        print(f"No PDF files found in {data_dir}")
+        logger.info(f"No PDF files found in {data_dir}")
         return documents
+    
+    logger.info(f"Found {len(pdf_files)} PDF file(s) in {data_dir}")
     
     for pdf_file in pdf_files:
         try:
-            print(f"Processing PDF: {pdf_file.name}")
+            logger.info(f"Processing PDF: {pdf_file.name}")
             raw_text = read_pdf(str(pdf_file))
+            
+            if not raw_text or not raw_text.strip():
+                logger.warning(f"⚠ Skipping {pdf_file.name}: No text extracted")
+                continue
+            
+            # Clean text
             cleaned_text = clean_text(raw_text)
             
-            if cleaned_text:  # Only add if there's actual content
-                documents.append({
-                    'title': pdf_file.stem,  # Filename without extension
-                    'filename': pdf_file.name,
-                    'filepath': str(pdf_file),
-                    'content': cleaned_text,
-                    'file_type': 'pdf'
-                })
+            if not cleaned_text:
+                logger.warning(f"⚠ Skipping {pdf_file.name}: Text became empty after cleaning")
+                continue
+            
+            # Detect language
+            detected_language = detect_language(cleaned_text)
+            
+            # Create document entry
+            doc = {
+                'title': pdf_file.stem,  # Filename without extension
+                'filename': pdf_file.name,
+                'filepath': str(pdf_file),
+                'content': cleaned_text,
+                'file_type': 'pdf',
+                'language': detected_language or 'unknown'
+            }
+            
+            if detected_language:
+                logger.info(f"✓ Processed {pdf_file.name} (language: {detected_language}, {len(cleaned_text)} chars)")
             else:
-                print(f"Warning: No text extracted from {pdf_file.name}")
+                logger.info(f"✓ Processed {pdf_file.name} ({len(cleaned_text)} chars)")
+            
+            documents.append(doc)
         
+        except FileNotFoundError as e:
+            logger.warning(f"⚠ Skipping {pdf_file.name}: {e}")
+            continue
         except Exception as e:
-            print(f"Error processing PDF {pdf_file.name}: {e}")
+            logger.warning(f"⚠ Skipping {pdf_file.name}: Error processing file - {e}")
+            continue
     
+    logger.info(f"Successfully processed {len(documents)}/{len(pdf_files)} PDF file(s)")
     return documents
 
 
@@ -147,46 +213,82 @@ def ingest_markdown_files(data_dir: str = "data"):
     markdown_files = list(data_path.glob("*.md")) + list(data_path.glob("*.markdown"))
     
     if not markdown_files:
-        print(f"No Markdown files found in {data_dir}")
+        logger.info(f"No Markdown files found in {data_dir}")
         return documents
+    
+    logger.info(f"Found {len(markdown_files)} Markdown file(s) in {data_dir}")
     
     for md_file in markdown_files:
         try:
-            print(f"Processing Markdown: {md_file.name}")
+            logger.info(f"Processing Markdown: {md_file.name}")
             raw_text = read_markdown(str(md_file))
+            
+            if not raw_text or not raw_text.strip():
+                logger.warning(f"⚠ Skipping {md_file.name}: No text extracted")
+                continue
+            
+            # Clean text
             cleaned_text = clean_text(raw_text)
             
-            if cleaned_text:  # Only add if there's actual content
-                documents.append({
-                    'title': md_file.stem,  # Filename without extension
-                    'filename': md_file.name,
-                    'filepath': str(md_file),
-                    'content': cleaned_text,
-                    'file_type': 'markdown'
-                })
+            if not cleaned_text:
+                logger.warning(f"⚠ Skipping {md_file.name}: Text became empty after cleaning")
+                continue
+            
+            # Detect language
+            detected_language = detect_language(cleaned_text)
+            
+            # Create document entry
+            doc = {
+                'title': md_file.stem,  # Filename without extension
+                'filename': md_file.name,
+                'filepath': str(md_file),
+                'content': cleaned_text,
+                'file_type': 'markdown',
+                'language': detected_language or 'unknown'
+            }
+            
+            if detected_language:
+                logger.info(f"✓ Processed {md_file.name} (language: {detected_language}, {len(cleaned_text)} chars)")
             else:
-                print(f"Warning: No text extracted from {md_file.name}")
+                logger.info(f"✓ Processed {md_file.name} ({len(cleaned_text)} chars)")
+            
+            documents.append(doc)
         
+        except FileNotFoundError as e:
+            logger.warning(f"⚠ Skipping {md_file.name}: {e}")
+            continue
         except Exception as e:
-            print(f"Error processing Markdown {md_file.name}: {e}")
+            logger.warning(f"⚠ Skipping {md_file.name}: Error processing file - {e}")
+            continue
     
+    logger.info(f"Successfully processed {len(documents)}/{len(markdown_files)} Markdown file(s)")
     return documents
 
 
-def ingest_all_documents(data_dir: str = "data") -> List[Dict[str, str]]:
+def ingest_all_documents(data_dir: str = "data"):
+    logger.info(f"Starting document ingestion from: {data_dir}")
     all_documents = []
     
-    # Ingest PDF files
-    pdf_documents = ingest_pdf_files(data_dir)
-    all_documents.extend(pdf_documents)
+    # Ingest PDF files (continues on error, logs warnings)
+    try:
+        pdf_documents = ingest_pdf_files(data_dir)
+        all_documents.extend(pdf_documents)
+    except Exception as e:
+        logger.error(f"Error ingesting PDF files: {e}")
     
-    # Ingest Markdown files
-    md_documents = ingest_markdown_files(data_dir)
-    all_documents.extend(md_documents)
+    # Ingest Markdown files (continues on error, logs warnings)
+    try:
+        md_documents = ingest_markdown_files(data_dir)
+        all_documents.extend(md_documents)
+    except Exception as e:
+        logger.error(f"Error ingesting Markdown files: {e}")
     
-    print(f"\nTotal documents ingested: {len(all_documents)}")
-    print(f"  - PDF files: {len(pdf_documents)}")
-    print(f"  - Markdown files: {len(md_documents)}")
+    logger.info(f"\n{'='*60}")
+    logger.info(f"Document ingestion completed:")
+    logger.info(f"  Total documents: {len(all_documents)}")
+    logger.info(f"  - PDF files: {len([d for d in all_documents if d.get('file_type') == 'pdf'])}")
+    logger.info(f"  - Markdown files: {len([d for d in all_documents if d.get('file_type') == 'markdown'])}")
+    logger.info(f"{'='*60}\n")
     
     return all_documents
 
