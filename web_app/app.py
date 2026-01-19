@@ -5,6 +5,7 @@ import os
 sys.path.insert(0, os.getcwd())
 
 from llm.answer_generator import AnswerGenerator, generate_answer
+from pathlib import Path
 
 # Set page configuration
 st.set_page_config(
@@ -111,25 +112,57 @@ if submit_button:
                     # Generate answer using cached generator
                     result = st.session_state.answer_generator.generate_answer(query, top_k=5)
                     
-                    # Display answer
+                    # Display answer with formatting
                     st.markdown("### Answer:")
-                    answer_text = result.get("answer", "No answer generated.")
-                    # Format answer with better readability - replace double newlines with paragraphs
-                    formatted_answer = answer_text.replace('\n\n', '\n\n')
+                    # Use formatted answer with highlights, fallback to plain answer
+                    answer_text = result.get("answer_formatted") or result.get("answer", "No answer generated.")
+                    
+                    # Convert newlines to HTML line breaks for proper paragraph display
+                    answer_html = answer_text.replace('\n\n', '</p><p>').replace('\n', '<br>')
+                    answer_html = f'<p>{answer_html}</p>'
+                    
                     # Display in a styled container
-                    st.markdown(f'<div class="answer-box">{formatted_answer}</div>', 
+                    st.markdown(f'<div class="answer-box">{answer_html}</div>', 
                                unsafe_allow_html=True)
                     
-                    # Display sources
+                    # Display sources with links below the answer
+                    sources_detailed = result.get("sources_detailed", [])
                     sources = result.get("sources", [])
-                    if sources:
+                    
+                    if sources_detailed or sources:
                         st.markdown("### Sources:")
                         st.markdown('<div class="sources-box">', unsafe_allow_html=True)
-                        for i, source in enumerate(sources, 1):
-                            st.markdown(f"{i}. {source}")
+                        
+                        # Use detailed sources if available, otherwise use simple sources
+                        if sources_detailed:
+                            for i, source_info in enumerate(sources_detailed, 1):
+                                filename = source_info.get('filename', 'Unknown')
+                                filepath = source_info.get('filepath', '')
+                                title = source_info.get('title', filename)
+                                file_type = source_info.get('file_type', '')
+                                
+                                # Create display with file path as link if available
+                                if filepath and os.path.exists(filepath):
+                                    file_link = filepath.replace('\\', '/')
+                                    source_display = f"{i}. <strong>{title}</strong> ({filename}) - <em>{file_type}</em>"
+                                    st.markdown(source_display, unsafe_allow_html=True)
+                                    st.markdown(f"   📄 `{file_link}`", unsafe_allow_html=False)
+                                else:
+                                    st.markdown(f"{i}. <strong>{title}</strong> ({filename}) - <em>{file_type}</em>", 
+                                              unsafe_allow_html=True)
+                        else:
+                            # Fallback to simple sources list
+                            for i, source in enumerate(sources, 1):
+                                st.markdown(f"{i}. {source}", unsafe_allow_html=True)
+                        
                         st.markdown('</div>', unsafe_allow_html=True)
                     else:
                         st.info("No sources available.")
+                    
+                    # Display keywords if available
+                    keywords = result.get("keywords", [])
+                    if keywords:
+                        st.caption(f"Keywords: {', '.join(keywords[:10])}")
                 
                 except Exception as e:
                     import traceback

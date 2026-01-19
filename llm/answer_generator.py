@@ -2,7 +2,7 @@
 import logging
 import os
 import re
-from typing import List, Dict, Optional, Any
+from typing import List, Dict, Optional, Any, Set
 
 try:
     from transformers import pipeline, AutoTokenizer, AutoModelForCausalLM
@@ -137,6 +137,79 @@ class AnswerGenerator:
         
         # If no sentence boundary found, return first 200 chars or whole text
         return text[:200] if len(text) > 200 else text
+    
+    def _extract_keywords(self, query: str, min_length: int = 3):
+        # Remove common stop words
+        stop_words = {'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 
+                     'of', 'with', 'by', 'is', 'are', 'was', 'were', 'be', 'been', 'being',
+                     'have', 'has', 'had', 'do', 'does', 'did', 'will', 'would', 'should',
+                     'could', 'can', 'may', 'might', 'this', 'that', 'these', 'those',
+                     'what', 'which', 'who', 'when', 'where', 'why', 'how'}
+        
+        # Extract words (alphanumeric sequences)
+        words = re.findall(r'\b[a-zA-Z]+\b', query.lower())
+        
+        # Filter by length and stop words
+        keywords = {word for word in words if len(word) >= min_length and word not in stop_words}
+        
+        return keywords
+    
+    def _format_answer_with_paragraphs(self, answer: str):
+        if not answer:
+            return answer
+        
+        # Split on double newlines (existing paragraph breaks)
+        paragraphs = [p.strip() for p in answer.split('\n\n') if p.strip()]
+        
+        # Also split long paragraphs (over 300 chars) at sentence boundaries
+        formatted_paragraphs = []
+        for para in paragraphs:
+            if len(para) > 300:
+                # Try to split at sentence boundaries
+                sentences = re.split(r'([.!?]\s+)', para)
+                current_para = ""
+                for i in range(0, len(sentences), 2):
+                    if i < len(sentences):
+                        sentence = sentences[i] + (sentences[i+1] if i+1 < len(sentences) else "")
+                        if len(current_para) + len(sentence) > 300 and current_para:
+                            formatted_paragraphs.append(current_para.strip())
+                            current_para = sentence
+                        else:
+                            current_para += sentence
+                if current_para.strip():
+                    formatted_paragraphs.append(current_para.strip())
+            else:
+                formatted_paragraphs.append(para)
+        
+        # Join paragraphs with double newlines
+        return "\n\n".join(formatted_paragraphs)
+    
+    def _highlight_keywords(self, text: str, keywords: Set[str], markdown: bool = False):
+        if not keywords or not text:
+            return text
+        
+        # Sort keywords by length (longest first) to avoid partial matches
+        sorted_keywords = sorted(keywords, key=len, reverse=True)
+        
+        result = text
+        for keyword in sorted_keywords:
+            # Case-insensitive replacement
+            pattern = re.compile(re.escape(keyword), re.IGNORECASE)
+            
+            if markdown:
+                # For markdown/HTML (Streamlit)
+                result = pattern.sub(
+                    lambda m: f"<mark style='background-color: #ffeb3b; padding: 2px 4px;'>{m.group()}</mark>",
+                    result
+                )
+            else:
+                # For terminal (CLI) - use ANSI escape codes for yellow background
+                result = pattern.sub(
+                    lambda m: f"\033[43m{m.group()}\033[0m",
+                    result
+                )
+        
+        return result
     
     def _generate_with_openai(self, query: str, context: str):
         try:
@@ -288,7 +361,10 @@ Answer:"""
             logger.warning("Empty query received.")
             return {
                 'answer': "Please provide a valid query.",
+                'answer_formatted': "Please provide a valid query.",
                 'sources': [],
+                'sources_detailed': [],
+                'keywords': [],
                 'retrieved_text': ''
             }
         
@@ -301,7 +377,10 @@ Answer:"""
                 logger.warning(f"No documents retrieved for query: '{query}'")
                 return {
                     'answer': "I couldn't find any relevant documents to answer your question.",
+                    'answer_formatted': "I couldn't find any relevant documents to answer your question.",
                     'sources': [],
+                    'sources_detailed': [],
+                    'keywords': [],
                     'retrieved_text': ''
                 }
             
@@ -335,11 +414,39 @@ Answer:"""
             else:  # mock
                 answer = self._generate_with_mock(query, retrieved_docs)
             
-            logger.info(f"Successfully generated answer (length: {len(answer)} chars)")
+            # Format answer with paragraphs
+            formatted_answer = self._format_answer_with_paragraphs(answer)
+            
+            # Extract keywords from query for highlighting
+            keywords = self._extract_keywords(query)
+            
+            # Create answer with highlights (markdown version for display)
+            answer_with_highlights_md = self._highlight_keywords(formatted_answer, keywords, markdown=True)
+            
+            # Create detailed sources with file information
+            detailed_sources = []
+            for doc in retrieved_docs:
+                title = doc.get('title', '')
+                filename = doc.get('filename', '')
+                filepath = doc.get('filepath', '')
+                
+                source_info = {
+                    'title': title,
+                    'filename': filename,
+                    'filepath': filepath,
+                    'file_type': doc.get('file_type', ''),
+                    'distance': doc.get('distance', 0.0)
+                }
+                detailed_sources.append(source_info)
+            
+            logger.info(f"Successfully generated answer (length: {len(formatted_answer)} chars, {len(keywords)} keywords)")
             
             return {
-                'answer': answer,
-                'sources': sources,
+                'answer': formatted_answer,  # Plain text for CLI
+                'answer_formatted': answer_with_highlights_md,  # Formatted with highlights for web
+                'sources': sources,  # Simple list for backward compatibility
+                'sources_detailed': detailed_sources,  # Detailed sources with file paths
+                'keywords': list(keywords),  # Extracted keywords
                 'retrieved_text': retrieved_text
             }
         
@@ -348,7 +455,10 @@ Answer:"""
             logger.exception("Full error details:")
             return {
                 'answer': f"An error occurred while generating the answer: {str(e)}",
+                'answer_formatted': f"An error occurred while generating the answer: {str(e)}",
                 'sources': [],
+                'sources_detailed': [],
+                'keywords': [],
                 'retrieved_text': ''
             }
 
