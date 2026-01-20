@@ -12,3 +12,4 @@ uvicorn
 pydantic
 PyPDF2
 langdetect
+pytest
