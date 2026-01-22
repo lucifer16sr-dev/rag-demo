@@ -35,7 +35,8 @@ class AnswerGenerator:
         hf_model: str = "microsoft/DialoGPT-medium",
         use_local: bool = False,
         query_system: Optional[QuerySystem] = None,
-        cache_size: int = 100
+        cache_size: int = 100,
+        relevance_threshold: float = 1.2
     ):
         self.model_type = model_type
         self.openai_model = openai_model
@@ -44,9 +45,16 @@ class AnswerGenerator:
         
         # Initialize or reuse QuerySystem for caching
         if query_system is None:
-            self.query_system = QuerySystem(cache_size=cache_size, enable_cache=True)
+            self.query_system = QuerySystem(
+                cache_size=cache_size, 
+                enable_cache=True,
+                relevance_threshold=relevance_threshold
+            )
         else:
             self.query_system = query_system
+            # Update relevance threshold if provided
+            if hasattr(self.query_system, 'relevance_threshold'):
+                self.query_system.relevance_threshold = relevance_threshold
         
         # Initialize model based on availability and preferences
         self._initialize_model()
@@ -374,14 +382,19 @@ Answer:"""
             retrieved_docs = self.query_system.query_documents(query, top_k=top_k)
             
             if not retrieved_docs:
-                logger.warning(f"No documents retrieved for query: '{query}'")
+                logger.warning(f"No relevant documents retrieved for query: '{query}'")
+                # Check if this might be an unrelated query
+                keywords = self._extract_keywords(query)
+                keyword_hint = f" (keywords: {', '.join(list(keywords)[:5])})" if keywords else ""
+                
                 return {
-                    'answer': "I couldn't find any relevant documents to answer your question.",
-                    'answer_formatted': "I couldn't find any relevant documents to answer your question.",
+                    'answer': f"I couldn't find any relevant documents in the knowledge base to answer your question about '{query}'. The query doesn't appear to match the content of the available documents.{keyword_hint}",
+                    'answer_formatted': f"I couldn't find any relevant documents in the knowledge base to answer your question about '<strong>{query}</strong>'. The query doesn't appear to match the content of the available documents.{keyword_hint}",
                     'sources': [],
                     'sources_detailed': [],
-                    'keywords': [],
-                    'retrieved_text': ''
+                    'keywords': list(keywords),
+                    'retrieved_text': '',
+                    'no_relevant_results': True
                 }
             
             # Extract sources

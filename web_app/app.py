@@ -62,7 +62,7 @@ if 'answer_generator' not in st.session_state:
     with st.spinner("Initializing answer generator (this may take a moment on first load)..."):
         try:
             # Use mock mode for faster responses, or auto to try OpenAI/HuggingFace
-            st.session_state.answer_generator = AnswerGenerator(model_type="mock")
+            st.session_state.answer_generator = AnswerGenerator(model_type="mock", relevance_threshold=1.2)
             st.session_state.initialized = True
         except Exception as e:
             st.error(f"Failed to initialize answer generator: {str(e)}")
@@ -112,6 +112,9 @@ if submit_button:
                     # Generate answer using cached generator
                     result = st.session_state.answer_generator.generate_answer(query, top_k=5)
                     
+                    # Check if no relevant results were found
+                    no_relevant = result.get("no_relevant_results", False)
+                    
                     # Display answer with formatting
                     st.markdown("### Answer:")
                     # Use formatted answer with highlights, fallback to plain answer
@@ -121,9 +124,14 @@ if submit_button:
                     answer_html = answer_text.replace('\n\n', '</p><p>').replace('\n', '<br>')
                     answer_html = f'<p>{answer_html}</p>'
                     
-                    # Display in a styled container
-                    st.markdown(f'<div class="answer-box">{answer_html}</div>', 
-                               unsafe_allow_html=True)
+                    # Display in a styled container with warning style if no relevant results
+                    if no_relevant:
+                        st.warning("⚠️ No relevant documents found for this query.")
+                        st.markdown(f'<div class="answer-box" style="background-color: #fff3cd; border-color: #ffc107;">{answer_html}</div>', 
+                                   unsafe_allow_html=True)
+                    else:
+                        st.markdown(f'<div class="answer-box">{answer_html}</div>', 
+                                   unsafe_allow_html=True)
                     
                     # Display sources with links below the answer
                     sources_detailed = result.get("sources_detailed", [])

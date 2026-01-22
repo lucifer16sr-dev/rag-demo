@@ -36,7 +36,8 @@ class QuerySystem:
         metadata_path: Optional[str] = None,
         snippet_length: int = 500,
         cache_size: int = 100,
-        enable_cache: bool = True
+        enable_cache: bool = True,
+        relevance_threshold: float = 1.2
     ):
         if embedding_store is None:
             logger.info("Loading embedding store from disk...")
@@ -54,6 +55,7 @@ class QuerySystem:
         # Initialize query cache (LRU-style using OrderedDict)
         self.enable_cache = enable_cache
         self.cache_size = cache_size
+        self.relevance_threshold = relevance_threshold
         self._cache: OrderedDict[str, List[Dict[str, Any]]] = OrderedDict()
         self._cache_hits = 0
         self._cache_misses = 0
@@ -61,6 +63,7 @@ class QuerySystem:
         logger.info(f"Query system initialized. Vector database contains {self.embedding_store.get_index_size()} documents.")
         if enable_cache:
             logger.info(f"Query caching enabled (max size: {cache_size})")
+        logger.info(f"Relevance threshold: {relevance_threshold} (results with distance > {relevance_threshold} will be filtered)")
     
     def _read_document_content(self, filepath: str, file_type: str):
         try:
@@ -192,11 +195,54 @@ class QuerySystem:
         # Search the FAISS index
         distances, indices = self.embedding_store.index.search(query_embedding, top_k)
         
-        # Process results
+        # Process results with relevance filtering
         results = []
+        filtered_count = 0
+        
+        # Find the best (lowest) distance to use as a reference
+        valid_distances = [d for d in distances[0] if d >= 0]
+        if not valid_distances:
+            logger.warning("No valid distances found in search results")
+            return []
+        
+        best_distance = min(valid_distances)
+        
+        # If the best match is already very poor (> 1.8), likely an unrelated query
+        # Filter everything in this case (increased from 1.5 to 1.8 to allow more legitimate queries)
+        if best_distance > 1.8:
+            logger.warning(f"Best distance {best_distance:.4f} is too high - likely unrelated query. Filtering all results.")
+            return []
+        
+        # Use adaptive threshold for legitimate queries: 
+        # - If best match is very good (< 0.5), use stricter filtering (best * 2.5)
+        # - If best match is moderate (0.5-1.0), use moderate filtering (best * 2.0)
+        # - If best match is borderline (1.0-1.5), use lenient filtering (best * 1.8)
+        # - If best match is poor but acceptable (1.5-1.8), use very lenient filtering (best * 1.3)
+        if best_distance < 0.5:
+            adaptive_threshold = best_distance * 2.5
+        elif best_distance < 1.0:
+            adaptive_threshold = best_distance * 2.0
+        elif best_distance < 1.5:
+            adaptive_threshold = best_distance * 1.8
+        else:  # 1.5 <= best_distance <= 1.8
+            adaptive_threshold = best_distance * 1.3
+        
+        # Use the more lenient threshold (higher value = more lenient)
+        # But cap it at 2.0 to prevent completely unrelated queries
+        effective_threshold = min(max(adaptive_threshold, self.relevance_threshold), 2.0)
+        
+        logger.info(f"Best distance: {best_distance:.4f}, Adaptive threshold: {adaptive_threshold:.4f}, Absolute threshold: {self.relevance_threshold:.4f}, Effective threshold: {effective_threshold:.4f}")
+        
         for i, (idx, distance) in enumerate(zip(indices[0], distances[0])):
             # Skip invalid indices (FAISS can return -1 if there aren't enough documents)
             if idx < 0:
+                continue
+            
+            # Apply effective threshold - only filter if distance exceeds the more lenient threshold
+            # This ensures relevant queries like "Deployment" are not filtered out
+            if distance > effective_threshold:
+                filtered_count += 1
+                logger.debug(f"Filtered result {idx} with distance {distance:.4f} (effective threshold: {effective_threshold:.4f})")
                 continue
             
             # Get metadata
@@ -228,7 +274,13 @@ class QuerySystem:
             }
             results.append(result)
         
-        logger.info(f"Retrieved {len(results)} documents for query: '{query}'")
+        if filtered_count > 0:
+            logger.info(f"Filtered {filtered_count} results above effective threshold ({effective_threshold:.4f})")
+        
+        if len(results) == 0 and filtered_count > 0:
+            logger.warning(f"No relevant documents found for query: '{query}' (all {filtered_count} results filtered, best distance: {best_distance:.4f}, threshold: {effective_threshold:.4f})")
+        else:
+            logger.info(f"Retrieved {len(results)} relevant documents for query: '{query}' (best distance: {best_distance:.4f})")
         
         # Cache the results
         self._add_to_cache(query, top_k, results)
@@ -249,10 +301,15 @@ def query_documents(
     query: str,
     top_k: int = 5,
     query_system: Optional[QuerySystem] = None,
+    relevance_threshold: float = 0.8,
     **kwargs
 ):
     if query_system is None:
+        kwargs.setdefault('relevance_threshold', relevance_threshold)
         query_system = QuerySystem(**kwargs)
+    elif hasattr(query_system, 'relevance_threshold'):
+        # Use existing threshold if query_system already has one
+        pass
     
     return query_system.query_documents(query, top_k)
 

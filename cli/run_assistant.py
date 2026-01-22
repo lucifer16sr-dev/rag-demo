@@ -63,6 +63,12 @@ def print_answer(result: dict):
     
     answer = result.get('answer', 'No answer generated.')
     keywords = result.get('keywords', [])
+    no_relevant = result.get("no_relevant_results", False)
+    
+    # Show warning if no relevant results
+    if no_relevant:
+        print("\033[93m⚠️  WARNING: No relevant documents found for this query.\033[0m")
+        print()
     
     # Format answer with paragraphs and highlight keywords
     if answer:
