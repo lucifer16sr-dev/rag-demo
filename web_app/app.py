@@ -88,19 +88,20 @@ with st.sidebar:
 # Main content area
 st.markdown("---")
 
-# Query input
-query = st.text_input(
-    "Enter your question:",
-    placeholder="What would you like to know?",
-    key="query_input"
-)
+# Use form to enable Enter key submission
+with st.form("query_form", clear_on_submit=False):
+    query = st.text_input(
+        "Enter your question:",
+        placeholder="What would you like to know? (Press Enter or click button)",
+        key="query_input"
+    )
+    
+    # Get Answer button (works with Enter key too)
+    col1, col2, col3 = st.columns([1, 1, 1])
+    with col2:
+        submit_button = st.form_submit_button("Get Answer", type="primary", use_container_width=True)
 
-# Get Answer button
-col1, col2, col3 = st.columns([1, 1, 1])
-with col2:
-    submit_button = st.button("Get Answer", type="primary", use_container_width=True)
-
-# Process query when button is clicked
+# Process query when form is submitted (either Enter key or button click)
 if submit_button:
     if query and query.strip():
         if not st.session_state.get('initialized', False):
